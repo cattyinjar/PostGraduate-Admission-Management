@@ -23,10 +23,9 @@
 ?? Python 3.11+?
 
 ```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e ".[dev]"
-pgam
+conda activate pgam
+python -m pip install -r requirements-dev.txt
+python run_app.py
 ```
 
 ???????????
