@@ -1,0 +1,2 @@
+[console_scripts]
+pgam = pgam.desktop.app:main
