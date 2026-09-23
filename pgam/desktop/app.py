@@ -193,7 +193,7 @@ class TaskDialog(QDialog):
         common = {
             "name": self.name.text().strip(),
             "url": self.url.text().strip(),
-            "source_type": self.source_type.currentData(),
+            "source_type": SourceType(self.source_type.currentData()),
             "check_interval_minutes": self.interval.value(),
             "enabled": self.enabled.isChecked(),
             "keywords": keywords,
@@ -386,6 +386,8 @@ class MainWindow(QMainWindow):
         return tray
 
     def refresh_all(self) -> None:
+        if self._closing:
+            return
         self.refresh_tasks()
         self.refresh_events()
         self.refresh_runs()

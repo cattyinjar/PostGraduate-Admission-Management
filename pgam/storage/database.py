@@ -138,6 +138,8 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._local = threading.local()
         self._init_lock = threading.Lock()
+        self._all_connections: list[sqlite3.Connection] = []
+        self._all_connections_lock = threading.RLock()
         self.initialize()
 
     def _backup_if_upgrade(self) -> None:
@@ -176,13 +178,15 @@ class Database:
     def connect(self) -> Iterator[sqlite3.Connection]:
         conn: sqlite3.Connection | None = getattr(self._local, "conn", None)
         if conn is None:
-            conn = sqlite3.connect(self.path, timeout=30)
+            conn = sqlite3.connect(self.path, timeout=30, check_same_thread=False)
             conn.row_factory = sqlite3.Row
             conn.execute("PRAGMA foreign_keys=ON")
             conn.execute("PRAGMA journal_mode=WAL")
             conn.execute("PRAGMA synchronous=NORMAL")
             conn.execute("PRAGMA busy_timeout=30000")
             self._local.conn = conn
+            with self._all_connections_lock:
+                self._all_connections.append(conn)
         yield conn
 
     @contextmanager
@@ -214,3 +218,17 @@ class Database:
         if conn is not None:
             conn.close()
             self._local.conn = None
+            with self._all_connections_lock:
+                if conn in self._all_connections:
+                    self._all_connections.remove(conn)
+
+    def close_all_connections(self) -> None:
+        """Close cached connections so temporary data directories can be removed on Windows."""
+        with self._all_connections_lock:
+            connections = list(self._all_connections)
+            self._all_connections.clear()
+        for conn in connections:
+            try:
+                conn.close()
+            except sqlite3.Error:
+                pass
