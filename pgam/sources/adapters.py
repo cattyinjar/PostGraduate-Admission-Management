@@ -21,9 +21,9 @@ TRACKING_PARAMS = {
 DATE_PATTERNS = [
     re.compile(r"(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})日?"),
 ]
-BAD_PARENT = re.compile(r"nav|menu|footer|friend|search|breadcrumb|pagination|copyright", re.I)
+BAD_PARENT = re.compile(r"nav|menu|footer|friend|link-item|link-items|links-wrap|botlinks|mod-link|search|breadcrumb|pagination|copyright", re.I)
 BAD_LINK_SUFFIX = {
-    ".jpg", ".jpeg", ".png", ".gif", ".css", ".js", ".ico", ".svg", ".webp", ".zip", ".rar",
+    ".jpg", ".jpeg", ".png", ".gif", ".css", ".js", ".ico", ".svg", ".webp", ".zip", ".rar", ".pdf", ".doc", ".docx", ".xls", ".xlsx",
 }
 
 
@@ -147,14 +147,27 @@ class RssAdapter:
 
 
 class StaticListAdapter:
+    """Extract announcement links from server-rendered HTML.
+
+    The adapter deliberately keeps auto-detection conservative, but it understands three
+    common Chinese university implementations beyond plain anchors: pseudo links backed by
+    ``data-val``, clickable ``div`` rows backed by ``onclick="window.open(...)"``, and
+    small semantic lists containing only one current announcement.
+    """
+
+    TITLE_CLASS_PATTERN = re.compile(r"(?:^|[-_ ])(?:name|title|txt|topic|subject)(?:$|[-_ ])", re.I)
+    DATE_CLASS_PATTERN = re.compile(r"(?:^|[-_ ])(?:time|date|data|meta|pubtime|published)(?:$|[-_ ])", re.I)
+    LIST_SEMANTIC_PATTERN = re.compile(r"news|notice|article|content|list|category|comment", re.I)
+    WINDOW_OPEN_PATTERN = re.compile(r"window\.open\(\s*(['\"])(.*?)\1", re.I)
+    LEADING_DAY_PATTERN = re.compile(r"^\s*\d{1,2}\s+(?=20\d{2})")
+    CATEGORY_TITLE_PATTERN = re.compile(r"^\[[^\]]+\]$")
+    EMPTY_PARENTHESES_PATTERN = re.compile(r"\s*\(\s*\)\s*$")
+
     def extract(self, task: MonitorTask, content: bytes, content_type: str, encoding: str) -> list[NormalizedListItem]:
         decoded = decode_content(content, encoding or task.adapter.encoding, content_type)
         soup = BeautifulSoup(decoded, "lxml")
         config = task.adapter
-        if config.item_selector:
-            items = self._selected_items(task, soup, config)
-        else:
-            items = self._auto_items(task, soup)
+        items = self._selected_items(task, soup, config) if config.item_selector else self._auto_items(task, soup)
         unique: dict[str, NormalizedListItem] = {}
         for item in items:
             unique[item.fingerprint] = item
@@ -165,88 +178,287 @@ class StaticListAdapter:
     ) -> list[NormalizedListItem]:
         result: list[NormalizedListItem] = []
         for node in soup.select(config.item_selector):
-            link_node: Tag | None = node.select_one(config.link_selector) if config.link_selector else node.find("a")
-            title_node = node.select_one(config.title_selector) if config.title_selector else link_node
-            date_node = node.select_one(config.date_selector) if config.date_selector else node
-            href = link_node.get("href") if isinstance(link_node, Tag) else None
-            title = clean_text(title_node.get_text(" ", strip=True) if title_node else "") or clean_text(
-                link_node.get_text(" ", strip=True) if link_node else node.get_text(" ", strip=True)
-            )
-            published = parse_datetime(date_node.get_text(" ", strip=True) if date_node else None)
+            if not isinstance(node, Tag):
+                continue
+            link_node: Tag | None = node.select_one(config.link_selector) if config.link_selector else None
+            if link_node is None and node.name == "a":
+                link_node = node
+            if link_node is None:
+                link_node = node.find("a", href=True)
+            title_node = node.select_one(config.title_selector) if config.title_selector else None
+            date_node = node.select_one(config.date_selector) if config.date_selector else None
+            href = self._node_url(task, link_node or node)
+            title = clean_text(title_node.get_text(" ", strip=True) if title_node else "")
+            if not title:
+                title = self._node_title(link_node or node)
+            if not title:
+                title = self._node_title(node)
+            published = self._node_date(date_node or node)
             if title:
-                result.append(make_item(task, title, urljoin(task.url, href) if href else None, published))
+                result.append(make_item(task, title, href, published))
         return result
 
     def _auto_items(self, task: MonitorTask, soup: BeautifulSoup) -> list[NormalizedListItem]:
-        for tag in soup(["script", "style"]):
+        for tag in soup(["script", "style", "noscript"]):
             tag.decompose()
-        anchors = [
-            anchor for anchor in soup.find_all("a", href=True)
-            if self._acceptable_anchor(task, anchor)
-        ]
-        if not anchors:
+        candidates = self._candidate_nodes(task, soup)
+        if not candidates:
             raise AdapterError("No usable announcement links were found on this page")
-        containers = [self._announcement_container(anchor) for anchor in anchors]
-        valid_containers = [node for node in containers if node is not None]
-        if not valid_containers:
+
+        parents: dict[int, Tag] = {}
+        votes: dict[int, list[tuple[Tag, datetime | None]]] = {}
+        for node, published in candidates:
+            current: Tag | None = node.parent
+            for _ in range(6):
+                if current is None or current.name in {"body", "html", "[document]"}:
+                    break
+                key = id(current)
+                parents[key] = current
+                votes.setdefault(key, []).append((node, published))
+                current = current.parent
+
+        ranked: list[tuple[float, int]] = []
+        for key, parent in parents.items():
+            rows = votes[key]
+            score = self._container_score(parent, rows, task)
+            if score is not None:
+                ranked.append((score, key))
+        if not ranked:
             raise AdapterError("Repeated announcement list structure was not found")
+        ranked.sort(reverse=True)
+        parent = parents[ranked[0][1]]
+        selected = rows = votes[ranked[0][1]]
+
+        strong_semantic = bool(self.LIST_SEMANTIC_PATTERN.search(self._signature(parent)))
+        dated = sum(published is not None for _, published in rows)
+        if len(rows) < 3 and not (len(rows) >= 1 and strong_semantic and dated == len(rows)):
+            raise AdapterError("Repeated announcement list structure was not found")
+
         items: list[NormalizedListItem] = []
         seen: set[str] = set()
-        for container in valid_containers:
-            for anchor in container.find_all("a", href=True):
-                if not self._acceptable_anchor(task, anchor):
-                    continue
-                href = urljoin(task.url, str(anchor.get("href", "")))
-                title = clean_text(anchor.get_text(" ", strip=True))
-                published = parse_datetime(container.get_text(" ", strip=True))
-                if not title:
-                    continue
-                item = make_item(task, title, href, published)
-                if item.fingerprint in seen:
-                    continue
-                seen.add(item.fingerprint)
-                items.append(item)
+        for node, published in selected:
+            href = self._node_url(task, node)
+            title = self._node_title(node)
+            if not title:
+                continue
+            item = make_item(task, title, href, published)
+            if item.fingerprint in seen:
+                continue
+            seen.add(item.fingerprint)
+            items.append(item)
         if not items:
             raise AdapterError("No announcement titles could be extracted")
         return items
 
-    @staticmethod
-    def _acceptable_anchor(task: MonitorTask, anchor: Tag) -> bool:
-        href = str(anchor.get("href", "")).strip().lower()
-        if not href or href.startswith(("#", "javascript:", "mailto:", "tel:")):
-            return False
-        if any(href.endswith(suffix) for suffix in BAD_LINK_SUFFIX):
-            return False
-        text = clean_text(anchor.get_text(" ", strip=True))
-        if len(text) < 6:
-            return False
-        parent_classes = " ".join(
-            str(value) for value in [anchor.get("class", []), anchor.get("id", "")]
+    def _candidate_nodes(self, task: MonitorTask, soup: BeautifulSoup) -> list[tuple[Tag, datetime | None]]:
+        nodes: list[Tag] = list(soup.find_all("a", href=True))
+        nodes.extend(node for node in soup.find_all(attrs={"onclick": True}) if node not in nodes)
+        nodes.extend(
+            node
+            for node in soup.find_all(attrs={"data-href": True})
+            if node.name != "a" and node not in nodes
         )
-        if BAD_PARENT.search(parent_classes):
-            return False
-        absolute = urljoin(task.url, str(anchor.get("href", "")))
-        parsed = urlparse(absolute)
+        result: list[tuple[Tag, datetime | None]] = []
+        seen: set[int] = set()
         task_host = urlparse(task.url).netloc.lower()
-        return not parsed.netloc or parsed.netloc.lower() == task_host
+        for node in nodes:
+            if not isinstance(node, Tag) or id(node) in seen:
+                continue
+            title = self._node_title(node)
+            url = self._node_url(task, node)
+            published = self._node_date(node)
+            if not title or len(title) < 6 or not url:
+                continue
+            if self.CATEGORY_TITLE_PATTERN.match(title):
+                continue
+            if self._has_bad_ancestor(node) or self._unacceptable_url(url):
+                continue
+            parsed = urlparse(url)
+            if parsed.netloc.lower() != task_host and published is None:
+                continue
+            seen.add(id(node))
+            result.append((node, published))
+        return result
 
-    @staticmethod
-    def _announcement_container(anchor: Tag) -> Tag | None:
-        current: Tag | None = anchor.parent
-        for _ in range(4):
-            if current is None or current.name in {"body", "html", "[document]"}:
-                return None
-            signature = " ".join(
-                str(value) for value in [current.get("class", []), current.get("id", "")]
+    def _container_score(
+        self, parent: Tag, rows: list[tuple[Tag, datetime | None]], task: MonitorTask
+    ) -> float | None:
+        task_host = urlparse(task.url).netloc.lower()
+        task_directory = self._url_directory(task.url)
+        signature = self._signature(parent)
+        if BAD_PARENT.search(signature):
+            return None
+        count = len(rows)
+        dated = sum(published is not None for _, published in rows)
+        urls = [self._node_url(task, row[0]) for row in rows]
+        unique_urls = len({url for url in urls if url})
+        same_host = sum(bool(url) and urlparse(url).netloc.lower() == task_host for url in urls)
+        semantic = bool(self.LIST_SEMANTIC_PATTERN.search(signature))
+        element_children = [child for child in parent.children if isinstance(child, Tag)]
+        item_wrappers = sum(self._contains_one(row[0], child) for child in element_children for row in rows)
+        wrapper_ratio = item_wrappers / max(len(element_children), 1)
+        title_lengths = [len(self._node_title(row[0])) for row in rows]
+        average_title = sum(title_lengths) / max(len(title_lengths), 1)
+        text_size = len(parent.get_text(" ", strip=True))
+        # A useful list node is compact. This penalty prevents body-like wrappers from
+        # defeating a deeply nested news list.
+        compactness = max(-12.0, min(0.0, 8.0 - text_size / max(count, 1) / 80.0))
+        dated_ratio = dated / max(count, 1)
+        path_affinity = (
+            sum(bool(url) and urlparse(url).path.startswith(task_directory) for url in urls)
+            / max(count, 1)
+        )
+        score = (
+            min(count, 35) * 1.2
+            + dated * 8.0
+            + dated_ratio * 8.0
+            - (1.0 - dated_ratio) * 6.0
+            + path_affinity * 20.0
+            + unique_urls * 0.7
+            + same_host * 0.4
+            + (5.0 if semantic else 0.0)
+            + min(wrapper_ratio, 1.0) * 5.0
+            + min(average_title / 18.0, 2.0)
+            + compactness
+        )
+        # One-item lists are accepted only when their class/id and dates strongly identify
+        # an announcement container.
+        if count < 3 and not (semantic and dated == count):
+            return None
+        return score
+
+    def _node_title(self, node: Tag | None) -> str:
+        if node is None:
+            return ""
+        explicit = clean_text(str(node.get("title") or ""))
+        if explicit:
+            return explicit
+        for heading in node.find_all(["h1", "h2", "h3", "h4"]):
+            value = clean_text(heading.get_text(" ", strip=True))
+            if len(value) >= 6 and not DATE_PATTERNS[0].search(value):
+                return value
+        for child in node.find_all(True):
+            classes = self._classes(child)
+            if child.name in {"span", "div", "p", "h1", "h2", "h3", "h4"} and any(
+                self.TITLE_CLASS_PATTERN.search(f" {value} ") for value in classes
+            ):
+                value = clean_text(child.get_text(" ", strip=True))
+                if value:
+                    return value
+        text = clean_text(node.get_text(" ", strip=True))
+        text = self.LEADING_DAY_PATTERN.sub("", text, count=1)
+        text = DATE_PATTERNS[0].sub("", text)
+        text = self.EMPTY_PARENTHESES_PATTERN.sub("", text)
+        return clean_text(text)
+
+    def _node_date(self, node: Tag | None) -> datetime | None:
+        if node is None:
+            return None
+        for attribute in ("datetime", "data-time", "data-date"):
+            parsed = parse_datetime(str(node.get(attribute) or ""))
+            if parsed:
+                return parsed
+        for child in node.find_all(True):
+            classes = self._classes(child)
+            if any(self.DATE_CLASS_PATTERN.search(f" {value} ") for value in classes):
+                parsed = parse_datetime(str(child.get_text(" ", strip=True)))
+                if parsed:
+                    return parsed
+        month_node = node.find(class_="month") or node.find("h6")
+        day_node = node.find(class_="day") or node.find("h3")
+        if month_node is not None and day_node is not None:
+            parsed = parse_datetime(
+                f"{clean_text(month_node.get_text())}.{clean_text(day_node.get_text())}"
             )
-            if BAD_PARENT.search(signature):
-                return None
-            links = current.find_all("a", href=True)
-            titles = [clean_text(link.get_text(" ", strip=True)) for link in links]
-            if len(links) >= 3 and sum(len(title) >= 6 for title in titles) >= 3:
-                return current
+            if parsed:
+                return parsed
+        current: Tag | None = node
+        for _ in range(3):
+            if current is None:
+                break
+            parsed = parse_datetime(current.get_text(" ", strip=True))
+            if parsed:
+                return parsed
             current = current.parent
         return None
+
+    def _node_url(self, task: MonitorTask, node: Tag | None) -> str | None:
+        if node is None:
+            return None
+        for attribute in ("data-href", "data-url"):
+            value = clean_text(str(node.get(attribute) or ""))
+            if value:
+                return urljoin(task.url, value)
+        href = clean_text(str(node.get("href") or ""))
+        if href and not href.startswith(("#", "mailto:", "tel:")):
+            if not href.lower().startswith("javascript:"):
+                return urljoin(task.url, href)
+        onclick = clean_text(str(node.get("onclick") or ""))
+        match = self.WINDOW_OPEN_PATTERN.search(onclick)
+        if match:
+            return urljoin(task.url, match.group(2))
+        value = clean_text(str(node.get("data-val") or ""))
+        if value and href.lower().startswith("javascript:"):
+            parsed = urlparse(task.url)
+            if parsed.path.rstrip("/").endswith("/list"):
+                detail_path = parsed.path.rstrip("/")[: -len("list")] + f"detail/{value}"
+                return urlunparse(parsed._replace(path=detail_path))
+        return None
+
+    def _safe_url(self, node: Tag) -> str | None:
+        for attribute in ("data-href", "data-url"):
+            value = clean_text(str(node.get(attribute) or ""))
+            if value:
+                return urljoin("https://example.invalid/", value)
+        href = clean_text(str(node.get("href") or ""))
+        if href and not href.lower().startswith(("javascript:", "#", "mailto:", "tel:")):
+            return urljoin("https://example.invalid/", href)
+        onclick = clean_text(str(node.get("onclick") or ""))
+        match = self.WINDOW_OPEN_PATTERN.search(onclick)
+        if match:
+            return urljoin("https://example.invalid/", match.group(2))
+        return None
+
+    @staticmethod
+    def _url_directory(url: str) -> str:
+        path = urlparse(url).path or "/"
+        if path.endswith("/"):
+            return path
+        parent = path.rsplit("/", 1)[0]
+        return f"{parent}/" if parent else "/"
+
+    def _unacceptable_url(self, url: str) -> bool:
+        lower = urlparse(url).path.lower()
+        return lower.endswith(tuple(BAD_LINK_SUFFIX))
+
+    def _has_bad_ancestor(self, node: Tag) -> bool:
+        current: Tag | None = node
+        for _ in range(5):
+            if current is None or current.name in {"body", "html", "[document]"}:
+                return False
+            signature = self._signature(current)
+            if BAD_PARENT.search(signature):
+                return True
+            if self.LIST_SEMANTIC_PATTERN.search(signature):
+                return False
+            current = current.parent
+        return False
+
+
+    @staticmethod
+    def _contains_one(candidate: Tag, wrapper: Tag) -> bool:
+        return any(candidate is descendant for descendant in wrapper.descendants)
+
+    @staticmethod
+    def _classes(node: Tag) -> list[str]:
+        value = node.get("class", [])
+        if isinstance(value, str):
+            return [value]
+        return [str(item) for item in value]
+
+    @staticmethod
+    def _signature(node: Tag) -> str:
+        return " ".join([node.name, *StaticListAdapter._classes(node), str(node.get("id") or "")])
 
 
 def decode_content(content: bytes, encoding_override: str | None, content_type: str = "") -> str:
