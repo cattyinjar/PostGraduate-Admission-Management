@@ -1,4 +1,4 @@
-#define MyAppName "PostGraduate Admission Monitor"
+﻿#define MyAppName "PostGraduate Admission Monitor"
 #define MyAppVersion "0.1.0"
 #define MyAppPublisher "Personal Project"
 #define MyAppExeName "PostGraduateAdmissionMonitor.exe"
@@ -32,9 +32,13 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
+Name: "autostart"; Description: "开机自动启动研究生招生信息监视系统"; GroupDescription: "启动选项："
 
 [Files]
 Source: "..\dist\PGAM\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+
+[Registry]
+Root: HKCU; Subkey: "Software\Microsoft\Windows\CurrentVersion\Run"; ValueType: string; ValueName: "PostGraduateAdmissionMonitor"; ValueData: """{app}\{#MyAppExeName}"" --hidden"; Flags: uninsdeletevalue; Tasks: autostart
 
 [Icons]
 Name: "{group}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"

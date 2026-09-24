@@ -5,6 +5,7 @@
 ## 核心能力
 
 - 分条管理监视任务，支持启用、暂停、编辑、删除和手动检查。
+- 任务列表按创建顺序排列，新建任务会追加到表格末尾。
 - 支持静态 HTML 通知列表与 RSS/Atom；可通过高级 CSS 选择器精确适配异常页面。
 - 首次运行只建立 baseline，不会把历史公告全部当作新消息。
 - 新消息与详情正文变化会生成持久化事件，程序重启后不会重复通知。
@@ -35,11 +36,20 @@ pgam
    - LLM Base URL、API Key、模型名；
    - SMTP 主机、端口、账号、密码、发件人和收件人；
    - 邮件主题前缀与默认检查间隔。
+   保密字段默认显示与已保存凭据等长的圆点；可在右侧显示/隐藏、复制或更换。
 2. 使用“测试连接”和“发送测试邮件”验证外部服务。
 3. 在“任务”页新增任务，填入公开列表页或 feed 地址。
 4. 使用“识别预览”确认标题、链接和日期；自动识别不准时可填写 CSS 选择器。
 5. 首次检查建立 baseline；之后发布的新通知会进入处理流水线。
 6. 最小化窗口会保留在系统托盘；托盘菜单中选择“退出”才会停止调度。
+
+## 开机自启动
+
+- 安装器默认开启开机自启动。
+- 自启动使用当前用户 HKCU Run 配置，不需要管理员权限。
+- 开机后程序会隐藏到系统托盘并继续后台调度。
+- 可以在“设置→常规”中勾选或取消“开机自动启动”。
+- 该偏好会持久化到 SQLite；卸载程序会清理自启动注册表项并保留用户数据。
 
 ## 数据与密钥
 
@@ -56,7 +66,7 @@ Verify all configuration and credential persistence:
 D:\anaconda\envs\pgam\python.exe -m pgam.testing.verify_config_persistence --mode verify
 ```
 
-The command uses an isolated temporary SQLite database and isolated Windows Credential Manager test entries. It verifies all 13 global settings, task adapter settings, the LLM API key, and the SMTP authorization code across separate processes, then removes the test credentials.
+The command uses an isolated temporary SQLite database and isolated Windows Credential Manager test entries. It verifies all 14 global settings, task adapter settings, the LLM API key, and the SMTP authorization code across separate processes, then removes the test credentials.
 
 ```text
 desktop/          PySide6 GUI、托盘、线程桥接

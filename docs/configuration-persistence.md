@@ -4,7 +4,7 @@ Persistent settings are split by security boundary:
 
 | Category | Storage |
 |---|---|
-| 13 global `AppSettings` fields | SQLite table `app_config` |
+| 14 global `AppSettings` fields, including the auto-start preference | SQLite table `app_config` |
 | Task name, URL, source type, interval, enabled state, keywords, LLM toggle, and adapter selectors | SQLite table `monitor_task` |
 | LLM API key | Windows Credential Manager |
 | SMTP password / authorization code | Windows Credential Manager |
@@ -17,7 +17,7 @@ D:\anaconda\envs\pgam\python.exe -m pgam.testing.verify_config_persistence --mod
 
 It verifies all of the following across separate Python processes:
 
-- All 13 `AppSettings` keys exist in `app_config`.
+- All 14 `AppSettings` keys exist in `app_config`.
 - Raw persisted values match expected typed values after reload.
 - Task-level advanced adapter configuration survives restart.
 - LLM API key survives restart in Windows Credential Manager.
@@ -44,4 +44,4 @@ Latest result:
 }
 ```
 
-The production configuration was also audited after loading the supplied DeepSeek and SMTP credentials. Its 13 SQLite keys are complete, and the production Credential Manager entries now match `token.txt` and `email_password.txt` exactly without printing either value.
+The production configuration was also audited after loading the supplied DeepSeek and SMTP credentials. Its 14 SQLite keys are complete, and the production Credential Manager entries now match `token.txt` and `email_password.txt` exactly without printing either value.

@@ -19,6 +19,7 @@ from pgam.storage.secrets import KeyringSecretStore
 
 EXPECTED_SETTINGS = AppSettings(
     default_interval_minutes=17,
+    auto_start_enabled=False,
     email_subject_prefix="\u3010\u914d\u7f6e\u6301\u4e45\u5316\u6d4b\u8bd5\u3011",
     immediate_email=False,
     llm_base_url="https://llm-persistence.test/v1",
@@ -73,12 +74,12 @@ async def _write_configuration(data_dir: Path, service_name: str) -> dict[str, A
         )
         await service.task_service.create_task(
             TaskCreateInput(
-                name="?????????",
+                name="\u914d\u7f6e\u6301\u4e45\u5316\u6d4b\u8bd5\u4efb\u52a1",
                 url="https://persistence.test/list.htm",
                 source_type=SourceType.RSS,
                 check_interval_minutes=11,
                 enabled=False,
-                keywords=["??", "??", "config persistence"],
+                keywords=["\u63a8\u514d", "\u8003\u7814", "config persistence"],
                 enable_llm_summary=False,
                 adapter=EXPECTED_ADAPTER,
             )
@@ -112,12 +113,12 @@ async def _read_and_validate(data_dir: Path, service_name: str) -> dict[str, Any
         task = service.task_repo.get(1)
         task_exact = bool(
             task
-            and task.name == "?????????"
+            and task.name == "\u914d\u7f6e\u6301\u4e45\u5316\u6d4b\u8bd5\u4efb\u52a1"
             and task.url == "https://persistence.test/list.htm"
             and task.source_type == SourceType.RSS
             and task.check_interval_minutes == 11
             and task.enabled is False
-            and task.keywords == ["??", "??", "config persistence"]
+            and task.keywords == ["\u63a8\u514d", "\u8003\u7814", "config persistence"]
             and task.enable_llm_summary is False
             and task.adapter == EXPECTED_ADAPTER
         )
@@ -127,6 +128,7 @@ async def _read_and_validate(data_dir: Path, service_name: str) -> dict[str, Any
         }
         expected_raw = {
             "default_interval_minutes": "17",
+            "auto_start_enabled": "False",
             "email_subject_prefix": EXPECTED_SETTINGS.email_subject_prefix,
             "immediate_email": "False",
             "llm_base_url": EXPECTED_SETTINGS.llm_base_url,

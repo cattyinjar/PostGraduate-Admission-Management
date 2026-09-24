@@ -176,7 +176,7 @@ class TaskRepository:
         return _task_from_row(rows[0]) if rows else None
 
     def list(self) -> list[MonitorTask]:
-        rows = self.db.query("SELECT * FROM monitor_task ORDER BY created_at DESC, id DESC")
+        rows = self.db.query("SELECT * FROM monitor_task ORDER BY created_at ASC, id ASC")
         return [_task_from_row(row) for row in rows]
 
     def due_tasks(self, now: datetime) -> list[MonitorTask]:

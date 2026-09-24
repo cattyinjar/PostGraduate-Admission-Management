@@ -79,7 +79,7 @@ def test_real_local_platform_through_desktop_gui(tmp_path, monkeypatch):
         task_ids = asyncio.run(create_tasks())
         assert _process_until(app, lambda: window.task_table.rowCount() == 3)
 
-        # Establish baselines through the same GUI ?????? action used by a user.
+        # Establish baselines through the same GUI manual-check action used by a user.
         for row in range(window.task_table.rowCount()):
             task_id = int(window.task_table.item(row, 0).text())
             window.task_table.selectRow(row)
@@ -101,7 +101,7 @@ def test_real_local_platform_through_desktop_gui(tmp_path, monkeypatch):
             "GUI-SITE-C-NEW-DETAIL-MARKER RSS links to a new detail page.",
         )
 
-        # Trigger the actual GUI action behind the ?????? button.
+        # Trigger the actual GUI action behind the manual-check button.
         for row in range(window.task_table.rowCount()):
             task_id = int(window.task_table.item(row, 0).text())
             window.task_table.selectRow(row)

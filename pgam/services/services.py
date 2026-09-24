@@ -208,6 +208,14 @@ class SettingsService:
     async def smtp_password(self) -> str:
         return await asyncio.to_thread(self.secrets.get, "smtp", "password") or ""
 
+    async def llm_api_key_length(self) -> int:
+        value = await asyncio.to_thread(self.secrets.get, "llm", "api_key")
+        return len(value or "")
+
+    async def smtp_password_length(self) -> int:
+        value = await asyncio.to_thread(self.secrets.get, "smtp", "password")
+        return len(value or "")
+
 
 class MonitoringService:
     def __init__(

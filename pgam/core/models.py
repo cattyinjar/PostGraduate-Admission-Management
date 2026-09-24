@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -189,6 +189,7 @@ class SummaryResult:
 @dataclass(slots=True)
 class AppSettings:
     default_interval_minutes: int = 30
+    auto_start_enabled: bool = True
     email_subject_prefix: str = "【招生监视】"
     immediate_email: bool = True
     llm_base_url: str = ""

@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import queue
@@ -39,6 +39,7 @@ from PySide6.QtWidgets import (
 
 from ..core.models import AdapterConfig, AppSettings, SourceType, TaskCreateInput, TaskUpdateInput
 from ..services.services import AppService
+from .startup import WindowsStartupManager
 
 
 class ServiceWorker(QThread):
@@ -117,6 +118,104 @@ class ServiceBridge:
     def shutdown(self) -> None:
         self.worker.stop()
         self.worker.wait(10000)
+
+
+class SecretField(QWidget):
+    """A masked secret editor that normally stores only a length-equal placeholder.
+
+    The real credential is not loaded for the initial mask. Reveal and copy operations
+    request it explicitly through the service bridge and only place it in the QLineEdit
+    when the user asks to visualize it.
+    """
+
+    reveal_requested = Signal()
+    copy_requested = Signal()
+
+    def __init__(self, placeholder: str, parent=None):
+        super().__init__(parent)
+        self._saved_length = 0
+        self._editing = False
+        self._revealed = False
+
+        self.edit = QLineEdit(self)
+        self.edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.edit.setReadOnly(True)
+        self.edit.setPlaceholderText(placeholder)
+        self.edit.setClearButtonEnabled(False)
+
+        self.display_button = QPushButton("\u663e\u793a", self)
+        self.copy_button = QPushButton("\u590d\u5236", self)
+        self.replace_button = QPushButton("\u66f4\u6362", self)
+        self.display_button.setEnabled(False)
+        self.copy_button.setEnabled(False)
+        self.display_button.clicked.connect(self._toggle_display)
+        self.copy_button.clicked.connect(self.copy_requested.emit)
+        self.replace_button.clicked.connect(self.begin_edit)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(self.edit, 1)
+        layout.addWidget(self.display_button)
+        layout.addWidget(self.copy_button)
+        layout.addWidget(self.replace_button)
+
+    def set_masked_length(self, length: int) -> None:
+        self._saved_length = max(0, int(length))
+        self._editing = False
+        self._revealed = False
+        self.edit.setReadOnly(True)
+        self.edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.edit.setText("\u2022" * self._saved_length)
+        self.edit.setPlaceholderText("\u5c1a\u672a\u4fdd\u5b58" if self._saved_length == 0 else "")
+        self.display_button.setText("\u663e\u793a")
+        self.display_button.setEnabled(self._saved_length > 0)
+        self.copy_button.setEnabled(self._saved_length > 0)
+        self.replace_button.setEnabled(True)
+
+    def begin_edit(self) -> None:
+        self._editing = True
+        self._revealed = False
+        self.edit.setReadOnly(False)
+        self.edit.setEchoMode(QLineEdit.EchoMode.Password)
+        self.edit.clear()
+        self.edit.setPlaceholderText("\u8f93\u5165\u65b0\u7684\u4fdd\u5bc6\u5185\u5bb9")
+        self.display_button.setText("\u663e\u793a")
+        self.display_button.setEnabled(False)
+        self.copy_button.setEnabled(False)
+        self.replace_button.setEnabled(False)
+        self.edit.setFocus(Qt.FocusReason.ShortcutFocusReason)
+
+    def set_secret_for_display(self, value: str) -> None:
+        self._saved_length = len(value)
+        self._editing = False
+        self._revealed = bool(value)
+        self.edit.setReadOnly(True)
+        self.edit.setEchoMode(QLineEdit.EchoMode.Normal if value else QLineEdit.EchoMode.Password)
+        self.edit.setText(value)
+        self.edit.setPlaceholderText("" if value else "\u5c1a\u672a\u4fdd\u5b58")
+        self.display_button.setText("\u9690\u85cf" if value else "\u663e\u793a")
+        self.display_button.setEnabled(bool(value))
+        self.copy_button.setEnabled(bool(value))
+        self.replace_button.setEnabled(True)
+
+    def hide_secret(self) -> None:
+        if self._editing:
+            self.edit.setEchoMode(QLineEdit.EchoMode.Password)
+            return
+        self.set_masked_length(self._saved_length)
+        self.replace_button.setEnabled(True)
+
+    def value_for_save(self) -> str | None:
+        return self.edit.text() if self._editing else None
+
+    def is_editing(self) -> bool:
+        return self._editing
+
+    def _toggle_display(self) -> None:
+        if self._revealed:
+            self.hide_secret()
+        else:
+            self.reveal_requested.emit()
 
 
 class TaskDialog(QDialog):
@@ -206,10 +305,12 @@ class TaskDialog(QDialog):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, bridge: ServiceBridge):
+    def __init__(self, bridge: ServiceBridge, *, startup_manager=None):
         super().__init__()
         self.bridge = bridge
+        self.startup_manager = startup_manager or WindowsStartupManager()
         self.settings: AppSettings | None = None
+        self._start_hidden = False
         self.setWindowTitle("研究生招生信息监视系统")
         self.resize(1280, 800)
         self.tabs = QTabWidget()
@@ -277,9 +378,21 @@ class MainWindow(QMainWindow):
         llm_box = QGroupBox("LLM（OpenAI-compatible /chat/completions）")
         llm_form = QFormLayout(llm_box)
         self.llm_base_url = QLineEdit()
-        self.llm_api_key = QLineEdit()
-        self.llm_api_key.setEchoMode(QLineEdit.EchoMode.Password)
-        self.llm_api_key.setPlaceholderText("留空表示保持已保存密钥不变")
+        self.llm_api_key = SecretField("\u5c1a\u672a\u4fdd\u5b58 API Key")
+        self.llm_api_key.reveal_requested.connect(
+            lambda: self.bridge.call(
+                self.bridge.service.settings_service.llm_api_key,
+                self.llm_api_key.set_secret_for_display,
+                self._secret_action_error,
+            )
+        )
+        self.llm_api_key.copy_requested.connect(
+            lambda: self.bridge.call(
+                self.bridge.service.settings_service.llm_api_key,
+                lambda value: self._copy_secret(value, "LLM API Key"),
+                self._secret_action_error,
+            )
+        )
         self.llm_model = QLineEdit()
         self.llm_timeout = QSpinBox()
         self.llm_timeout.setRange(5, 300)
@@ -301,9 +414,21 @@ class MainWindow(QMainWindow):
         self.smtp_port.setRange(1, 65535)
         self.smtp_port.setValue(587)
         self.smtp_username = QLineEdit()
-        self.smtp_password = QLineEdit()
-        self.smtp_password.setEchoMode(QLineEdit.EchoMode.Password)
-        self.smtp_password.setPlaceholderText("留空表示保持已保存密码不变")
+        self.smtp_password = SecretField("\u5c1a\u672a\u4fdd\u5b58 SMTP \u6388\u6743\u7801")
+        self.smtp_password.reveal_requested.connect(
+            lambda: self.bridge.call(
+                self.bridge.service.settings_service.smtp_password,
+                self.smtp_password.set_secret_for_display,
+                self._secret_action_error,
+            )
+        )
+        self.smtp_password.copy_requested.connect(
+            lambda: self.bridge.call(
+                self.bridge.service.settings_service.smtp_password,
+                lambda value: self._copy_secret(value, "SMTP \u6388\u6743\u7801"),
+                self._secret_action_error,
+            )
+        )
         self.smtp_sender = QLineEdit()
         self.smtp_recipient = QLineEdit()
         self.smtp_tls = QCheckBox("使用 STARTTLS / TLS")
@@ -323,11 +448,15 @@ class MainWindow(QMainWindow):
         general_form = QFormLayout(general_box)
         self.default_interval = QSpinBox()
         self.default_interval.setRange(5, 1440)
+        self.auto_start = QCheckBox("\u5f00\u673a\u81ea\u52a8\u542f\u52a8\uff0c\u5e76\u6700\u5c0f\u5316\u5230\u7cfb\u7edf\u6258\u76d8")
+        self.auto_start.setChecked(True)
+        self.auto_start.setToolTip("\u4ec5\u5199\u5165\u5f53\u524d\u7528\u6237\u7684 Windows \u81ea\u542f\u52a8\u914d\u7f6e\uff0c\u4e0d\u9700\u8981\u7ba1\u7406\u5458\u6743\u9650\u3002")
         self.subject_prefix = QLineEdit("【招生监视】")
         self.immediate_email = QCheckBox("发现新消息立即发送邮件")
         self.immediate_email.setChecked(True)
         general_form.addRow("默认检查间隔（分钟）", self.default_interval)
         general_form.addRow("邮件主题前缀", self.subject_prefix)
+        general_form.addRow(self.auto_start)
         general_form.addRow(self.immediate_email)
 
         save = QPushButton("保存设置")
@@ -521,6 +650,28 @@ class MainWindow(QMainWindow):
         replace_items = QMessageBox.question(self, "导入模式", "是否清空现有任务后导入？") == QMessageBox.StandardButton.Yes
         self.bridge.call(lambda: self.bridge.service.task_service.import_tasks(path, replace_items), lambda count: self.after_task_change(f"已导入 {count} 条任务"), self._show_error)
 
+    def _refresh_secret_masks(self) -> None:
+        self.bridge.call(
+            self.bridge.service.settings_service.llm_api_key_length,
+            self.llm_api_key.set_masked_length,
+            self._secret_action_error,
+        )
+        self.bridge.call(
+            self.bridge.service.settings_service.smtp_password_length,
+            self.smtp_password.set_masked_length,
+            self._secret_action_error,
+        )
+
+    def _secret_action_error(self, message: str) -> None:
+        self._show_error("\u4fdd\u5bc6\u5b57\u6bb5\u64cd\u4f5c\u5931\u8d25\uff0c\u8bf7\u67e5\u770b\u8bca\u65ad\u4fe1\u606f\u3002")
+
+    def _copy_secret(self, value: str, label: str) -> None:
+        if not value:
+            QMessageBox.information(self, "\u590d\u5236\u5931\u8d25", f"{label}\u5c1a\u672a\u4fdd\u5b58\u3002")
+            return
+        QApplication.clipboard().setText(value)
+        self.statusBar().showMessage(f"{label}\u5df2\u590d\u5236", 3000)
+
     def _apply_settings(self, settings: AppSettings):
         self.settings = settings
         self.llm_base_url.setText(settings.llm_base_url)
@@ -534,15 +685,18 @@ class MainWindow(QMainWindow):
         self.smtp_recipient.setText(settings.smtp_recipient)
         self.smtp_tls.setChecked(settings.smtp_use_tls)
         self.default_interval.setValue(settings.default_interval_minutes)
+        self.auto_start.setChecked(settings.auto_start_enabled and self.startup_manager.is_enabled())
         self.subject_prefix.setText(settings.email_subject_prefix)
         self.immediate_email.setChecked(settings.immediate_email)
+        self._refresh_secret_masks()
 
-    def save_settings(self):
+    def save_settings(self, after_save=None):
         if self.settings is None:
             return
         settings = replace(
             self.settings,
             default_interval_minutes=self.default_interval.value(),
+            auto_start_enabled=self.auto_start.isChecked(),
             email_subject_prefix=self.subject_prefix.text().strip() or "【招生监视】",
             immediate_email=self.immediate_email.isChecked(),
             llm_base_url=self.llm_base_url.text().strip().rstrip("/"),
@@ -556,20 +710,24 @@ class MainWindow(QMainWindow):
             smtp_recipient=self.smtp_recipient.text().strip(),
             smtp_use_tls=self.smtp_tls.isChecked(),
         )
-        api_key = self.llm_api_key.text()
-        password = self.smtp_password.text()
+        try:
+            self.startup_manager.set_enabled(self.auto_start.isChecked())
+        except OSError as exc:
+            self._show_error(f"\u5f00\u673a\u81ea\u542f\u52a8\u8bbe\u7f6e\u5931\u8d25\uff1a{exc}")
+            return
+        api_key = self.llm_api_key.value_for_save()
+        password = self.smtp_password.value_for_save()
         self.bridge.call(
             lambda: self.bridge.service.settings_service.save(
                 settings, llm_api_key=api_key if api_key else None, smtp_password=password if password else None
             ),
-            lambda _: self._settings_saved(settings),
+            lambda result: self._settings_saved(settings, result, after_save),
             self._show_error,
         )
 
-    def _settings_saved(self, settings):
+    def _settings_saved(self, settings, _result=None, after_save=None):
         self.settings = settings
-        self.llm_api_key.clear()
-        self.smtp_password.clear()
+        self._refresh_secret_masks()
         self.statusBar().showMessage("设置已保存", 5000)
 
     def test_llm(self):
@@ -641,6 +799,7 @@ def main() -> int:
     app = QApplication(sys.argv)
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("PostGraduateAdmissionMonitor")
+    start_hidden = "--hidden" in sys.argv
     lock_path = Path.home() / ".pgam.lock"
     lock = QLockFile(str(lock_path))
     if not lock.tryLock(100):
@@ -648,9 +807,28 @@ def main() -> int:
         return 0
     try:
         service = AppService()
+        startup_manager = WindowsStartupManager()
+        settings = service.settings_repo.load()
+        auto_start_setting_exists = bool(
+            service.db.query(
+                "SELECT 1 FROM app_config WHERE key='auto_start_enabled'"
+            )
+        )
+        if not auto_start_setting_exists:
+            settings.auto_start_enabled = True
+            service.settings_repo.save(settings)
+        try:
+            startup_manager.set_enabled(settings.auto_start_enabled)
+        except OSError as exc:
+            QMessageBox.warning(None, "\u5f00\u673a\u81ea\u542f\u52a8", f"\u65e0\u6cd5\u8bbe\u7f6e\u5f00\u673a\u81ea\u542f\u52a8\uff1a{exc}")
         bridge = ServiceBridge(service)
-        window = MainWindow(bridge)
-        window.show()
+        window = MainWindow(bridge, startup_manager=startup_manager)
+        window._start_hidden = start_hidden
+        if start_hidden:
+            window.hide()
+            window._tray.show()
+        else:
+            window.show()
         result = app.exec()
         bridge.shutdown()
         return result

@@ -9,6 +9,7 @@ from pgam.storage.secrets import InMemorySecretStore
 
 EXPECTED_SETTINGS = AppSettings(
     default_interval_minutes=17,
+    auto_start_enabled=False,
     email_subject_prefix="\u3010\u914d\u7f6e\u6301\u4e45\u5316\u6d4b\u8bd5\u3011",
     immediate_email=False,
     llm_base_url="https://llm-persistence.test/v1",
@@ -44,12 +45,12 @@ def test_all_settings_and_task_configuration_survive_service_restart(tmp_path):
         )
         task = await first.task_service.create_task(
             TaskCreateInput(
-                name="?????????",
+                name="\u914d\u7f6e\u6301\u4e45\u5316\u6d4b\u8bd5\u4efb\u52a1",
                 url="https://persistence.test/list.htm",
                 source_type=SourceType.RSS,
                 check_interval_minutes=11,
                 enabled=False,
-                keywords=["??", "??"],
+                keywords=["\u63a8\u514d", "\u8003\u7814"],
                 enable_llm_summary=False,
                 adapter=EXPECTED_ADAPTER,
             )
@@ -65,7 +66,7 @@ def test_all_settings_and_task_configuration_survive_service_restart(tmp_path):
         persisted = await second.task_service.get_task(task.id)
         assert persisted is not None
         assert persisted.adapter == EXPECTED_ADAPTER
-        assert persisted.keywords == ["??", "??"]
+        assert persisted.keywords == ["\u63a8\u514d", "\u8003\u7814"]
         assert persisted.enable_llm_summary is False
         await second.stop()
         second.db.close_all_connections()
