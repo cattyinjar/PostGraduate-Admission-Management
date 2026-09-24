@@ -1,4 +1,4 @@
-﻿#define MyAppName "PostGraduate Admission Monitor"
+#define MyAppName "PostGraduate Admission Monitor"
 #define MyAppVersion "0.1.0"
 #define MyAppPublisher "Personal Project"
 #define MyAppExeName "PostGraduateAdmissionMonitor.exe"
@@ -11,7 +11,15 @@ AppPublisher={#MyAppPublisher}
 DefaultDirName={autopf}\{#MyAppName}
 DefaultGroupName={#MyAppName}
 UninstallDisplayIcon={app}\{#MyAppExeName}
+UninstallDisplayName={#MyAppName} {#MyAppVersion}
+OutputDir=..\dist\installer
 OutputBaseFilename=PGAM-0.1.0-x64
+SetupIconFile=assets\app.ico
+SetupLogging=yes
+CloseApplications=yes
+RestartApplications=no
+DisableProgramGroupPage=yes
+MinVersion=10.0
 Compression=lzma2/max
 SolidCompression=yes
 ArchitecturesInstallIn64BitMode=x64
@@ -19,7 +27,7 @@ WizardStyle=modern
 PrivilegesRequired=lowest
 
 [Languages]
-Name: "chinesesimplified"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
+Name: "chinesesimplified"; MessagesFile: "assets\ChineseSimplified.isl"
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Tasks]
@@ -34,4 +42,5 @@ Name: "{autodesktop}\{#MyAppName}"; Filename: "{app}\{#MyAppExeName}"; Tasks: de
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#MyAppName}}"; Flags: nowait postinstall skipifsilent
+
 

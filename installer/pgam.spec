@@ -24,5 +24,6 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
+    icon=r"..\installer\assets\app.ico",
 )
 coll = COLLECT(exe, a.binaries, a.datas, strip=False, upx=False, name="PGAM")

@@ -50,6 +50,14 @@ pgam
 
 ## 架构
 
+Verify all configuration and credential persistence:
+
+```powershell
+D:\anaconda\envs\pgam\python.exe -m pgam.testing.verify_config_persistence --mode verify
+```
+
+The command uses an isolated temporary SQLite database and isolated Windows Credential Manager test entries. It verifies all 13 global settings, task adapter settings, the LLM API key, and the SMTP authorization code across separate processes, then removes the test credentials.
+
 ```text
 desktop/          PySide6 GUI、托盘、线程桥接
 services/         应用服务、任务管理、调度与流水线编排
@@ -142,14 +150,33 @@ D:\anaconda\envs\pgam\python.exe -m pgam.testing.verify_realistic_full_chain
 
 This command makes 16 real DeepSeek calls, sends 16 real notification emails to `2710936865@qq.com`, and verifies that every event reaches `notified`. It consumes real API quota.
 
-## 打包
+## Packaging and install verification
+
+Build the official installer:
 
 ```powershell
-pyinstaller pgam.spec
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\build-installer.ps1
 ```
 
-安装包使用 Inno Setup 脚本 `installer/pgam.iss` 生成。用户数据保存在 `%APPDATA%`，卸载时可保留。
+The script runs dependency checks, pytest, Ruff, PyInstaller, and Inno Setup. It generates:
 
+```text
+dist/installer/PGAM-0.1.0-x64.exe
+```
+
+Verify the installer:
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\verify-installer.ps1 -InstallerPath .\dist\installer\PGAM-0.1.0-x64.exe
+```
+
+The verifier performs silent installation, validates uninstall registration, launches the installed executable, creates and reopens persistent SQLite data under `%APPDATA%`, verifies task retention, uninstalls the program, and confirms user data remains preserved.
+
+User data location:
+
+```text
+%APPDATA%\PostGraduateAdmissionMonitor
+```
 ## 边界与后续方向
 
 - 首版不处理登录、验证码、付费内容或需要模拟登录的教务系统。

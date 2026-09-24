@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import threading
 
@@ -7,21 +7,24 @@ from keyring.errors import KeyringError
 
 
 class KeyringSecretStore:
-    SERVICE = "PostGraduateAdmissionMonitor"
+    DEFAULT_SERVICE = "PostGraduateAdmissionMonitor"
+
+    def __init__(self, service: str | None = None):
+        self.service = service or self.DEFAULT_SERVICE
 
     def get(self, service: str, name: str) -> str | None:
         try:
-            value = keyring.get_password(self.SERVICE, f"{service}:{name}")
+            value = keyring.get_password(self.service, f"{service}:{name}")
             return value
         except KeyringError:
             return None
 
     def set(self, service: str, name: str, value: str) -> None:
-        keyring.set_password(self.SERVICE, f"{service}:{name}", value)
+        keyring.set_password(self.service, f"{service}:{name}", value)
 
     def delete(self, service: str, name: str) -> None:
         try:
-            keyring.delete_password(self.SERVICE, f"{service}:{name}")
+            keyring.delete_password(self.service, f"{service}:{name}")
         except KeyringError:
             return
 
