@@ -1,11 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
+from PyInstaller.utils.hooks import collect_data_files
+
 hiddenimports = ["keyring.backends.Windows"]
+trafilatura_data = collect_data_files("trafilatura")
 
 a = Analysis(
     ["../run_app.py"],
     pathex=[".."],
     binaries=[],
-    datas=[],
+    datas=trafilatura_data,
     hiddenimports=hiddenimports,
     hookspath=[],
     runtime_hooks=[],

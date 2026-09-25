@@ -2,6 +2,8 @@
 
 这是一个面向个人用户的 Windows 桌面程序，用于监视高校和科研院所公开招生的静态网页与 RSS/Atom 源。系统自动识别新通知，抓取详情正文，调用 OpenAI-compatible LLM 生成中文结构化摘要，并通过 SMTP 发送邮件提醒。
 
+- User-configurable timezone for task, message, diagnostic, and email time display; UTC remains the storage format.
+
 ## 核心能力
 
 - 分条管理监视任务，支持启用、暂停、编辑、删除和手动检查。
@@ -66,7 +68,7 @@ Verify all configuration and credential persistence:
 D:\anaconda\envs\pgam\python.exe -m pgam.testing.verify_config_persistence --mode verify
 ```
 
-The command uses an isolated temporary SQLite database and isolated Windows Credential Manager test entries. It verifies all 14 global settings, task adapter settings, the LLM API key, and the SMTP authorization code across separate processes, then removes the test credentials.
+The command uses an isolated temporary SQLite database and isolated Windows Credential Manager test entries. It verifies all 15 global settings, task adapter settings, the LLM API key, and the SMTP authorization code across separate processes, then removes the test credentials.
 
 ```text
 desktop/          PySide6 GUI、托盘、线程桥接

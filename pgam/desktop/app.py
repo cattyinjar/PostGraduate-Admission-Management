@@ -6,8 +6,10 @@ import sys
 import traceback
 from collections.abc import Awaitable, Callable
 from dataclasses import replace
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
 from PySide6.QtCore import QLockFile, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
@@ -38,7 +40,7 @@ from PySide6.QtWidgets import (
 )
 
 from ..core.models import AdapterConfig, AppSettings, SourceType, TaskCreateInput, TaskUpdateInput
-from ..services.services import AppService
+from ..services.services import AppService, default_data_dir
 from .startup import WindowsStartupManager
 
 
@@ -61,17 +63,26 @@ class ServiceWorker(QThread):
     def run(self) -> None:
         self._loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self._loop)
-        self._loop.run_until_complete(self.service.start())
-        while True:
-            item = self.jobs.get()
-            if item is None:
-                break
-            job_id, coroutine = item
-            task = self._loop.create_task(self._run_job(job_id, coroutine))
-            self._loop.run_until_complete(task)
-        self._loop.run_until_complete(self.service.stop())
-        self._loop.close()
-        self._loop = None
+        try:
+            # Keep this event loop running for the application lifetime. The scheduler
+            # consists of long-lived asyncio tasks; briefly calling run_until_complete()
+            # only while a GUI job arrives would leave those tasks permanently suspended.
+            self._loop.run_until_complete(self._main())
+        finally:
+            self._loop.close()
+            self._loop = None
+
+    async def _main(self) -> None:
+        try:
+            await self.service.start()
+            while True:
+                item = await asyncio.to_thread(self.jobs.get)
+                if item is None:
+                    break
+                job_id, coroutine = item
+                await self._run_job(job_id, coroutine)
+        finally:
+            await self.service.stop()
 
     async def _run_job(self, job_id: int, coroutine: Awaitable[Any]) -> None:
         try:
@@ -327,10 +338,8 @@ class MainWindow(QMainWindow):
     def _build_task_page(self) -> None:
         page = QWidget()
         layout = QVBoxLayout(page)
-        self.task_table = QTableWidget(0, 9)
-        self.task_table.setHorizontalHeaderLabels(
-            ["ID", "任务", "状态", "启用", "间隔", "上次检查", "上次成功", "连续失败", "待处理"]
-        )
+        self.task_table = QTableWidget(0, 10)
+        self.task_table.setHorizontalHeaderLabels(["ID", "\u4efb\u52a1", "\u72b6\u6001", "\u542f\u7528", "\u95f4\u9694", "\u4e0a\u6b21\u68c0\u67e5", "\u4e0a\u6b21\u6210\u529f", "\u4e0b\u6b21\u68c0\u67e5", "\u8fde\u7eed\u5931\u8d25", "\u5f85\u5904\u7406"])
         self.task_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         self.task_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
         layout.addWidget(self.task_table)
@@ -446,9 +455,16 @@ class MainWindow(QMainWindow):
 
         general_box = QGroupBox("常规")
         general_form = QFormLayout(general_box)
+        self.display_timezone = QComboBox()
+        self.display_timezone.addItem("\u8ddf\u968f Windows \u7cfb\u7edf\u65f6\u533a", "system")
+        for zone in sorted(available_timezones()):
+            self.display_timezone.addItem(zone, zone)
+        self.display_timezone.setToolTip("\u4ec5\u5f71\u54cd\u754c\u9762\u548c\u90ae\u4ef6\u4e2d\u7684\u65f6\u95f4\u663e\u793a\uff1b\u6570\u636e\u5e93\u5185\u90e8\u4ecd\u4f7f\u7528 UTC \u65f6\u95f4\u5b58\u50a8\u3002")
+
         self.default_interval = QSpinBox()
         self.default_interval.setRange(5, 1440)
         self.auto_start = QCheckBox("\u5f00\u673a\u81ea\u52a8\u542f\u52a8\uff0c\u5e76\u6700\u5c0f\u5316\u5230\u7cfb\u7edf\u6258\u76d8")
+        general_form.addRow("\u65f6\u95f4\u663e\u793a\u65f6\u533a", self.display_timezone)
         self.auto_start.setChecked(True)
         self.auto_start.setToolTip("\u4ec5\u5199\u5165\u5f53\u524d\u7528\u6237\u7684 Windows \u81ea\u542f\u52a8\u914d\u7f6e\uff0c\u4e0d\u9700\u8981\u7ba1\u7406\u5458\u6743\u9650\u3002")
         self.subject_prefix = QLineEdit("【招生监视】")
@@ -479,6 +495,8 @@ class MainWindow(QMainWindow):
         layout = QVBoxLayout(page)
         self.run_table = QTableWidget(0, 5)
         self.run_table.setHorizontalHeaderLabels(["ID", "任务", "开始", "结束", "状态/错误"])
+        self.run_table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.run_table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
         layout.addWidget(self.run_table)
         self.diagnostic_text = QTextEdit()
         self.diagnostic_text.setReadOnly(True)
@@ -531,13 +549,40 @@ class MainWindow(QMainWindow):
     def refresh_runs(self) -> None:
         self.bridge.call(self.bridge.service.recent_runs, self._render_runs, self._show_error)
 
+    def _display_timezone(self):
+        name = self.settings.display_timezone if self.settings else "system"
+        if name == "system":
+            return datetime.now().astimezone().tzinfo or UTC
+        try:
+            return ZoneInfo(name)
+        except (ZoneInfoNotFoundError, ValueError):
+            return UTC
+
+    def _format_display_time(self, value) -> str:
+        if value is None:
+            return "-"
+        if getattr(value, "tzinfo", None) is None:
+            value = value.replace(tzinfo=UTC)
+        local_value = value.astimezone(self._display_timezone())
+        offset = local_value.strftime("%z")
+        offset_text = f"UTC{offset[:3]}:{offset[3:]}" if offset else "UTC"
+        return f"{local_value.strftime('%Y-%m-%d %H:%M:%S')} {offset_text}"
+
+
     def _render_tasks(self, tasks):
         self.task_table.setRowCount(len(tasks))
         for row, task in enumerate(tasks):
             values = [
-                task.id, task.name, task.current_status, "启用" if task.enabled else "暂停",
-                f"{task.check_interval_minutes} 分钟", task.last_checked_at or "-", task.last_success_at or "-",
-                task.failure_count, task.pending_event_count,
+                task.id,
+                task.name,
+                task.current_status,
+                "\u542f\u7528" if task.enabled else "\u6682\u505c",
+                f"{task.check_interval_minutes} \u5206\u949f",
+                self._format_display_time(task.last_checked_at),
+                self._format_display_time(task.last_success_at),
+                self._format_display_time(task.next_check_at),
+                task.failure_count,
+                task.pending_event_count,
             ]
             for column, value in enumerate(values):
                 item = QTableWidgetItem(str(value))
@@ -553,7 +598,7 @@ class MainWindow(QMainWindow):
             values = [
                 event.id, type_label.get(event.event_type.value, event.event_type.value), event.status.value,
                 event.task_name, event.detail_title or event.item_title, event.item_url or "-",
-                event.updated_at,
+                self._format_display_time(event.updated_at),
             ]
             for column, value in enumerate(values):
                 self.event_table.setItem(row, column, QTableWidgetItem(str(value)))
@@ -562,9 +607,13 @@ class MainWindow(QMainWindow):
     def _render_runs(self, runs):
         self.run_table.setRowCount(len(runs))
         for row, run in enumerate(runs):
+            normal_label = "\u6b63\u5e38"
             values = [
-                run.id, run.task_id, run.started_at, run.finished_at or "-",
-                f"{run.status.value}: {run.error_message or '正常'}",
+                run.id,
+                run.task_id,
+                self._format_display_time(run.started_at),
+                self._format_display_time(run.finished_at),
+                f"{run.status.value}: {run.error_message or normal_label}",
             ]
             for column, value in enumerate(values):
                 self.run_table.setItem(row, column, QTableWidgetItem(str(value)))
@@ -685,6 +734,8 @@ class MainWindow(QMainWindow):
         self.smtp_recipient.setText(settings.smtp_recipient)
         self.smtp_tls.setChecked(settings.smtp_use_tls)
         self.default_interval.setValue(settings.default_interval_minutes)
+        timezone_index = self.display_timezone.findData(settings.display_timezone)
+        self.display_timezone.setCurrentIndex(max(0, timezone_index))
         self.auto_start.setChecked(settings.auto_start_enabled and self.startup_manager.is_enabled())
         self.subject_prefix.setText(settings.email_subject_prefix)
         self.immediate_email.setChecked(settings.immediate_email)
@@ -696,6 +747,7 @@ class MainWindow(QMainWindow):
         settings = replace(
             self.settings,
             default_interval_minutes=self.default_interval.value(),
+            display_timezone=self.display_timezone.currentData(),
             auto_start_enabled=self.auto_start.isChecked(),
             email_subject_prefix=self.subject_prefix.text().strip() or "【招生监视】",
             immediate_email=self.immediate_email.isChecked(),
@@ -800,7 +852,8 @@ def main() -> int:
     app.setQuitOnLastWindowClosed(False)
     app.setApplicationName("PostGraduateAdmissionMonitor")
     start_hidden = "--hidden" in sys.argv
-    lock_path = Path.home() / ".pgam.lock"
+    lock_path = default_data_dir() / ".pgam.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock = QLockFile(str(lock_path))
     if not lock.tryLock(100):
         QMessageBox.warning(None, "程序已在运行", "研究生招生信息监视系统已经启动，请从系统托盘打开。")

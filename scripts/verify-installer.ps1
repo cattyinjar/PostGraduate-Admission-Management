@@ -53,6 +53,8 @@ try {
 
     $exe = Join-Path $installDir "PostGraduateAdmissionMonitor.exe"
     if (-not (Test-Path $exe)) { throw "Installed executable is missing" }
+    $trafilaturaSettings = Join-Path $installDir "_internal\trafilatura\settings.cfg"
+    if (-not (Test-Path $trafilaturaSettings)) { throw "Packaged trafilatura settings.cfg is missing" }
     if (-not (Test-Path $runKeyPath)) { throw "Installed auto-start Run key was not created" }
     $autoStartValue = (Get-ItemProperty $runKeyPath).$runKeyName
     if (-not $autoStartValue -or -not $autoStartValue.StartsWith("`"$installDir", [StringComparison]::OrdinalIgnoreCase) -or -not $autoStartValue.Contains("--hidden")) {
@@ -169,6 +171,7 @@ conn.close()
         installer = $installer.Path
         install_dir = $installDir
         executable_launched = $true
+        trafilatura_settings_packaged = $true
         persistent_database = (Join-Path $dataDir "app.db")
         persistent_task_retained = $true
         uninstall_registry_removed = -not (Test-Path $uninstallKey)

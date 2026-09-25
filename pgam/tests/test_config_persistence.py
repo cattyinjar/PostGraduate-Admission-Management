@@ -9,6 +9,7 @@ from pgam.storage.secrets import InMemorySecretStore
 
 EXPECTED_SETTINGS = AppSettings(
     default_interval_minutes=17,
+    display_timezone="Asia/Shanghai",
     auto_start_enabled=False,
     email_subject_prefix="\u3010\u914d\u7f6e\u6301\u4e45\u5316\u6d4b\u8bd5\u3011",
     immediate_email=False,

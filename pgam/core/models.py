@@ -189,6 +189,7 @@ class SummaryResult:
 @dataclass(slots=True)
 class AppSettings:
     default_interval_minutes: int = 30
+    display_timezone: str = "system"
     auto_start_enabled: bool = True
     email_subject_prefix: str = "【招生监视】"
     immediate_email: bool = True

@@ -74,3 +74,38 @@ def test_email_success(monkeypatch):
     asyncio.run(notifier.send_test())
     assert len(sent) == 1
     assert sent[0]["Subject"].startswith("[TEST]")
+
+
+def test_event_email_uses_configured_display_timezone():
+    from pgam.core.models import MonitorTask, SummaryResult
+    from pgam.notifications.email import EmailNotifier, SmtpConfig
+
+    notifier = EmailNotifier(
+        SmtpConfig(
+            "smtp.example.com",
+            587,
+            "user@example.com",
+            "secret",
+            "from@example.com",
+            "to@example.com",
+            True,
+            "[TEST]",
+            "Asia/Shanghai",
+        )
+    )
+    task = MonitorTask(
+        1,
+        "task",
+        "https://example.edu.cn",
+        "auto",
+        "{}",
+        30,
+        True,
+        None,
+        None,
+        0,
+        __import__("datetime").datetime.now(),
+        __import__("datetime").datetime.now(),
+    )
+    text = notifier._event_text(task.name, "title", None, SummaryResult("high", "category", "summary"))
+    assert "UTC+08:00" in text

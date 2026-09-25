@@ -11,6 +11,7 @@ from dataclasses import asdict
 from datetime import timedelta
 from pathlib import Path
 from urllib.parse import urlparse
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..core.models import (
     AdapterConfig,
@@ -53,10 +54,25 @@ def default_data_dir() -> Path:
 
 
 def _validate_url(url: str) -> str:
-    parsed = urlparse(url)
+    raw = url.strip()
+    if "](" in raw:
+        left, right = raw.split("](", 1)
+        candidates = [left.strip(), right.rstrip(")").strip()]
+    else:
+        candidates = [raw]
+    candidates = [candidate.strip("<>") for candidate in candidates]
+    candidate = next(
+        (
+            item
+            for item in candidates
+            if urlparse(item).scheme in {"http", "https"} and urlparse(item).netloc
+        ),
+        "",
+    )
+    parsed = urlparse(candidate)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        raise ValueError("网址必须是有效的 http/https 地址")
-    return url.strip()
+        raise ValueError("URL must be a valid http/https address")
+    return candidate
 
 
 def _json_or_default(value: str, default: str) -> str:
@@ -150,7 +166,7 @@ class TaskService:
     async def import_tasks(self, path: str | Path, replace: bool = False) -> int:
         data = json.loads(Path(path).read_text(encoding="utf-8"))
         if not isinstance(data, list):
-            raise ValueError("任务导入文件必须是数组")
+            raise ValueError("\u4efb\u52a1\u5bfc\u5165\u6587\u4ef6\u5fc5\u987b\u662f\u6570\u7ec4")
         if replace:
             for task in await asyncio.to_thread(self.repository.list):
                 await asyncio.to_thread(self.repository.delete, task.id)
@@ -187,6 +203,11 @@ class SettingsService:
         smtp_password: str | None = None,
     ) -> None:
         settings.default_interval_minutes = max(5, settings.default_interval_minutes)
+        if settings.display_timezone != "system":
+            try:
+                ZoneInfo(settings.display_timezone)
+            except (ZoneInfoNotFoundError, ValueError) as exc:
+                raise ValueError("Invalid display timezone") from exc
         settings.llm_timeout_seconds = max(5, settings.llm_timeout_seconds)
         settings.llm_max_output_tokens = max(256, settings.llm_max_output_tokens)
         settings.smtp_port = 1 if settings.smtp_port <= 0 else min(65535, settings.smtp_port)
@@ -275,6 +296,7 @@ class MonitoringService:
                 recipient=settings.smtp_recipient,
                 use_tls=settings.smtp_use_tls,
                 subject_prefix=settings.email_subject_prefix,
+                display_timezone=settings.display_timezone,
             )
         )
 
@@ -323,7 +345,7 @@ class MonitoringService:
                 run.finished_at = utc_now()
                 await asyncio.to_thread(self.runs.finish, run.id, RunStatus.SUCCESS.value, None)
                 if not updated_task.enabled:
-                    await self._send_failure_email_safely(updated_task, "任务连续失败 10 次，已自动暂停，请检查网站是否改版。")
+                    await self._send_failure_email_safely(updated_task, "\u4efb\u52a1\u8fde\u7eed\u5931\u8d25 10 \u6b21\uff0c\u5df2\u81ea\u52a8\u6682\u505c\uff0c\u8bf7\u68c0\u67e5\u7f51\u7ad9\u662f\u5426\u6539\u7248\u3002")
                 return run
             except Exception as exc:
                 error = self._safe_error(exc)
@@ -440,7 +462,7 @@ class MonitoringService:
                     self.monitoring.update_event_status,
                     event.id,
                     EventStatus.DETECTED,
-                    f"详情页抓取失败：{exc}",
+                    f"\u8be6\u60c5\u9875\u62a3\u53d6\u5931\u8d25\uff1a{exc}",
                     True,
                 )
                 return
@@ -469,7 +491,7 @@ class MonitoringService:
                 self.monitoring.update_event_status,
                 event.id,
                 EventStatus.SUMMARIZE_FAILED,
-                f"AI 摘要不可用：{exc}",
+                f"AI \u6458\u8981\u4e0d\u53ef\u7528\uff1a{exc}",
                 True,
             )
             return None
@@ -479,7 +501,7 @@ class MonitoringService:
         if record:
             return SummaryResult(
                 relevance=str(record.get("relevance", "medium")),
-                category=str(record.get("category", "其他")),
+                category=str(record.get("category", "\u5176\u4ed6")),
                 summary=str(record.get("summary", "")),
                 key_dates=list(record.get("key_dates", [])),
                 action_required=str(record.get("action_required", "")),
@@ -495,8 +517,8 @@ class MonitoringService:
             names, links = [], []
         return SummaryResult(
             relevance="medium",
-            category=event.event_type == EventType.CONTENT_UPDATED and "内容更新" or "其他",
-            summary="AI 摘要暂不可用，请通过原文链接查看完整通知。",
+            category=event.event_type == EventType.CONTENT_UPDATED and "\u5185\u5bb9\u66f4\u65b0" or "\u5176\u4ed6",
+            summary="AI \u6458\u8981\u6682\u4e0d\u53ef\u7528\uff0c\u8bf7\u901a\u8fc7\u539f\u6587\u94fe\u63a5\u67e5\u770b\u5b8c\u6574\u901a\u77e5\u3002",
             important_links=[event.item_url] if event.item_url else [],
             attachments=names + links,
             degraded=True,
@@ -517,7 +539,7 @@ class MonitoringService:
                 )
                 return
             except NotificationError as exc:
-                last_error = f"邮件发送失败：{exc}"
+                last_error = f"\u90ae\u4ef6\u53d1\u9001\u5931\u8d25\uff1a{exc}"
                 if attempt < 2:
                     await asyncio.sleep((attempt + 1) * 0.5)
         await asyncio.to_thread(
@@ -688,8 +710,8 @@ class AppService:
         settings = await self.settings_service.load()
         api_key = await self.settings_service.llm_api_key()
         summarizer = self._create_summarizer(settings, api_key)
-        result = await summarizer.summarize("连接测试", "这是一条连接测试消息。", None)
-        return result.summary or "LLM 连接成功"
+        result = await summarizer.summarize("\u8fde\u63a5\u6d4b\u8bd5", "\u8fd9\u662f\u4e00\u6761\u8fde\u63a5\u6d4b\u8bd5\u6d88\u606f\u3002", None)
+        return result.summary or "LLM \u8fde\u63a5\u6210\u529f"
 
     def _create_summarizer(self, settings: AppSettings, api_key: str) -> SummarizerProtocol:
         return OpenAICompatibleSummarizer(
@@ -709,6 +731,8 @@ class AppService:
                 settings.smtp_recipient,
                 settings.smtp_use_tls,
                 settings.email_subject_prefix,
+                settings.display_timezone,
             )
         )
         await notifier.send_test()
+

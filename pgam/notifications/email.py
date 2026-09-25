@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import asyncio
 import smtplib
@@ -8,6 +8,7 @@ from datetime import datetime
 from email.message import EmailMessage
 from html import escape
 from typing import Protocol
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from ..core.models import MonitorTask, SummaryResult
 from ..core.ports import NotifierProtocol
@@ -27,6 +28,7 @@ class SmtpConfig:
     recipient: str
     use_tls: bool = True
     subject_prefix: str = "【招生监视】"
+    display_timezone: str = "system"
 
 
 RELEVANCE_LABEL = {"high": "高相关", "medium": "中相关", "low": "低相关"}
@@ -95,15 +97,25 @@ class EmailNotifier(NotifierProtocol):
             client.login(self.config.username, self.config.password)
         client.send_message(message)
 
-    @staticmethod
-    def _event_text(task_name: str, title: str, url: str | None, summary: SummaryResult) -> str:
+    def _now_display(self) -> str:
+        now = datetime.now().astimezone()
+        if self.config.display_timezone != "system":
+            try:
+                now = now.astimezone(ZoneInfo(self.config.display_timezone))
+            except (ZoneInfoNotFoundError, ValueError):
+                pass
+        offset = now.strftime("%z")
+        offset_text = f"UTC{offset[:3]}:{offset[3:]}" if offset else "UTC"
+        return f"{now.strftime('%Y-%m-%d %H:%M:%S')} {offset_text}"
+
+    def _event_text(self, task_name: str, title: str, url: str | None, summary: SummaryResult) -> str:
         dates = "\n".join(f"- {item['name']}：{item['time']}" for item in summary.key_dates)
         attachments = "\n".join(f"- {item}" for item in summary.attachments)
         return f"""任务：{task_name}
 标题：{title}
 分类：{summary.category}
 相关性：{RELEVANCE_LABEL.get(summary.relevance, summary.relevance)}
-首次发现：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}
+        "\u9996\u6b21\u53d1\u73b0\uff1a{self._now_display()}"
 
 AI 摘要：
 {summary.summary or 'AI 摘要暂不可用。'}
@@ -119,8 +131,7 @@ AI 摘要：
 附件：
 {attachments or '无'}"""
 
-    @staticmethod
-    def _event_html(task_name: str, title: str, url: str | None, summary: SummaryResult) -> str:
+    def _event_html(self, task_name: str, title: str, url: str | None, summary: SummaryResult) -> str:
         dates = "".join(
             f"<li>{escape(item['name'])}：{escape(item['time'])}</li>" for item in summary.key_dates
         )
@@ -137,7 +148,7 @@ AI 摘要：
 <h3>附件</h3><ul>{attachments or '<li>无</li>'}</ul>
 <h3>重要链接</h3><ul>{links or '<li>无</li>'}</ul>
 {source}
-<p style="color:#666">首次发现时间：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}</p>
+<p style="color:#666">\u9996\u6b21\u53d1\u73b0\u65f6\u95f4\uff1a{self._now_display()}</p>
 </div>"""
 
 

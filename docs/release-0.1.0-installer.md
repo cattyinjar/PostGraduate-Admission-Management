@@ -3,15 +3,19 @@
 ## Artifact
 
 - Installer: `dist/installer/PGAM-0.1.0-x64.exe`
-- Size: `47,748,304` bytes (`45.53 MB`)
-- SHA-256: `881C66C7D46E4205B3894EB4F094CBE316A9F3AC7BCA61DB018DB05813EA173E`
+- Size: `47,783,943` bytes (`45.53 MB`)
+- SHA-256: `A7EEF8D71E178E68484F276627BE2C48D8100FC2ED782FF94067B5CC08FABD1D`
 - Installer framework: Inno Setup 6.7.3
 - Application framework: PyInstaller one-dir
 - Target system: Windows 10 or later, 64-bit
 - Install scope: current user
 - Auto-start: enabled by default for the current user; configurable in Settings
 - Task list: creation order, with newly created tasks appended at the end
+- Time display: user-configurable timezone for tasks, messages, diagnostics, and emails; UTC remains the storage format
+- Diagnostics: run table and detail text are read-only
 - Secret fields: length-equal masks with reveal/hide, copy, and replace controls
+- Runtime hardening: packaged trafilatura settings/data, extractor fallback, and Markdown URL normalization
+- Scheduler: background asyncio loop remains alive, so interval checks and pending notifications run without a manual GUI action
 
 ## Build
 
@@ -72,7 +76,7 @@ Uninstalling the application preserves this directory and the SQLite database in
 The release build was validated with:
 
 ```text
-39 passed
+47 passed
 Ruff: all checks passed
 Python compileall: passed
 ```

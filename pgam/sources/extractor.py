@@ -1,4 +1,4 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
@@ -56,8 +56,18 @@ class DetailExtractor:
         attachments = self._attachments(soup, base_url)
         text = ""
         if trafilatura is not None:
-            extracted = trafilatura.extract(html, include_comments=False, include_tables=True, favor_recall=True)
-            text = clean_text(extracted)
+            try:
+                extracted = trafilatura.extract(
+                    html,
+                    include_comments=False,
+                    include_tables=True,
+                    favor_recall=True,
+                )
+                text = clean_text(extracted)
+            except Exception:
+                # A packaged third-party extractor may lack its settings file or data.
+                # Keep monitoring available by falling back to the local HTML extractor.
+                text = ""
         if not text:
             node = soup.find("article") or soup.find("main") or soup.find(class_=re.compile("content|article", re.I)) or soup.body
             text = clean_text(node.get_text("\n", strip=True) if node else "")
